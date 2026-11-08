@@ -25,137 +25,132 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 <canvas id="art"></canvas>
 <div id="top"><div id="title">CONTOUR ART</div><div id="subtitle">TAP TO CREATE A LANDSCAPE</div></div>
 <div id="counter">0 / 5</div>
-<div id="hint">画面をタップして地形をつくる</div>
+<div id="hint">画面をタップして頂上をつくる</div>
 <button id="reset" type="button">RESET</button>
 </div>
 <script>
 (()=>{
+'use strict';
 const canvas=document.getElementById('art'),ctx=canvas.getContext('2d');
 const counter=document.getElementById('counter'),hint=document.getElementById('hint'),reset=document.getElementById('reset');
 let W=0,H=0,DPR=1,peaks=[],contours=[],phase='drawing',fadeStart=0;
-const LEVELS=10,MAX_POINTS=5,GRID=8,FADE_MS=3000;
-let gridW=0,gridH=0,gridVals=null,levelValues=[];
+const MAX_PEAKS=5,LEVELS_PER_PEAK=10,GRID=7,FADE_MS=3200;
+let gw=0,gh=0,values=null,levels=[];
 
 function resize(){
  W=innerWidth;H=innerHeight;DPR=Math.min(devicePixelRatio||1,2);
  canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);
  ctx.setTransform(DPR,0,0,DPR,0,0);
- if(peaks.length) rebuild();
- else clearCanvas();
+ if(peaks.length)rebuild();else clearCanvas();
 }
-function clearCanvas(){ctx.clearRect(0,0,W,H);ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);counter.textContent=`${peaks.length} / ${MAX_POINTS}`;}
-function sigma(){return Math.max(W,H)*.43;}
+function clearCanvas(){
+ ctx.clearRect(0,0,W,H);ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+ counter.textContent=`${peaks.length} / ${MAX_PEAKS}`;
+}
+function hashNoise(seed,n){
+ const v=Math.sin(seed*127.1+n*311.7)*43758.5453;
+ return (v-Math.floor(v))*2-1;
+}
+function peakField(p,x,y){
+ const dx=x-p.x,dy=y-p.y,r=Math.hypot(dx,dy),a=Math.atan2(dy,dx);
+ // Smooth, individually distorted hill: several harmonics keep contours organic but nested.
+ const shape=1
+  +.095*Math.sin(3*a+p.seed)
+  +.052*Math.sin(5*a-p.seed*1.7)
+  +.026*Math.sin(8*a+p.seed*.63)
+  +.018*Math.sin(11*a-p.seed*.4);
+ const rx=Math.max(W,H)*.34;
+ const rr=r/shape;
+ const anis=1+.10*Math.sin(a*2+p.seed*.7);
+ const q=rr/(rx*anis);
+ return Math.exp(-.5*q*q);
+}
 function fieldAt(x,y){
- const s=sigma();let v=0;
- for(const p of peaks){
-  const dx=x-p.x,dy=y-p.y;
-  // A broad, softly irregular hill. Smooth summed elevation creates continuous contour topology.
-  const a=Math.atan2(dy,dx),r=Math.hypot(dx,dy);
-  const distortion=1+.075*Math.sin(3*a+p.seed)+.045*Math.sin(5*a-p.seed*1.7)+.025*Math.sin(8*a+p.seed*.6);
-  const rr=r/distortion;
-  v+=Math.exp(-(rr*rr)/(2*s*s));
- }
+ let v=0;
+ for(const p of peaks)v+=p.height*peakField(p,x,y);
  return v;
 }
 function buildGrid(){
- gridW=Math.ceil(W/GRID)+1;gridH=Math.ceil(H/GRID)+1;
- gridVals=new Float32Array(gridW*gridH);
+ gw=Math.ceil(W/GRID)+1;gh=Math.ceil(H/GRID)+1;
+ values=new Float32Array(gw*gh);
  let min=Infinity,max=-Infinity;
- for(let y=0;y<gridH;y++)for(let x=0;x<gridW;x++){
+ for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){
   const v=fieldAt(Math.min(W,x*GRID),Math.min(H,y*GRID));
-  gridVals[y*gridW+x]=v;if(v<min)min=v;if(v>max)max=v;
+  values[y*gw+x]=v;min=Math.min(min,v);max=Math.max(max,v);
  }
- return {min,max};
+ return {min,max,span:Math.max(1e-7,max-min)};
 }
-function interp(x1,y1,v1,x2,y2,v2,level){
- const d=v2-v1,t=Math.abs(d)<1e-9?.5:(level-v1)/d;
- return {x:(x1+(x2-x1)*t)*GRID,y:(y1+(y2-y1)*t)*GRID};
-}
-function key(p){return `${Math.round(p.x*10)},${Math.round(p.y*10)}`;}
-function extract(level){
- const segments=[];
- for(let y=0;y<gridH-1;y++)for(let x=0;x<gridW-1;x++){
-  const x0=x,y0=y,x1=x+1,y1=y+1;
-  const a=gridVals[y0*gridW+x0],b=gridVals[y0*gridW+x1],c=gridVals[y1*gridW+x1],d=gridVals[y1*gridW+x0];
-  const pts=[];
-  if((a<level)!==(b<level))pts.push(interp(x0,y0,a,x1,y0,b,level)); // top
-  if((b<level)!==(c<level))pts.push(interp(x1,y0,b,x1,y1,c,level)); // right
-  if((d<level)!==(c<level))pts.push(interp(x0,y1,d,x1,y1,c,level)); // bottom
-  if((a<level)!==(d<level))pts.push(interp(x0,y0,a,x0,y1,d,level)); // left
-  if(pts.length===2)segments.push([pts[0],pts[1]]);
-  else if(pts.length===4){
-   // Resolve saddle cells consistently using the cell-center elevation.
-   const center=(a+b+c+d)/4;
-   if((a>=level)===(center>=level)){
-    segments.push([pts[0],pts[3]],[pts[1],pts[2]]);
-   }else{
-    segments.push([pts[0],pts[1]],[pts[2],pts[3]]);
+function getLevels(range){
+ const result=[];
+ peaks.forEach((p,i)=>{
+  let saddle=range.min+range.span*.035;
+  if(peaks.length>1){
+   let nearest=null,best=Infinity;
+   peaks.forEach((q,j)=>{if(i===j)return;const d=Math.hypot(p.x-q.x,p.y-q.y);if(d<best){best=d;nearest=q;}});
+   if(nearest){
+    // Saddle estimate between this summit and its nearest neighbour.
+    const mx=(p.x+nearest.x)/2,my=(p.y+nearest.y)/2;
+    saddle=fieldAt(mx,my);
    }
   }
- }
- // Stitch marching-squares segments into separate non-crossing contour paths.
- const adjacency=new Map(),all=[];
- segments.forEach((s,i)=>{
-  const k0=key(s[0]),k1=key(s[1]);
-  if(!adjacency.has(k0))adjacency.set(k0,[]);
-  if(!adjacency.has(k1))adjacency.set(k1,[]);
-  adjacency.get(k0).push(i);adjacency.get(k1).push(i);
-  all.push({p:s,used:false});
+  const summit=fieldAt(p.x,p.y);
+  const low=Math.max(range.min+range.span*.012,Math.min(saddle,summit-range.span*.04));
+  const high=Math.max(low+range.span*.03,summit-range.span*.025);
+  for(let k=0;k<LEVELS_PER_PEAK;k++){
+   const t=(k+.55)/LEVELS_PER_PEAK;
+   const v=low+(high-low)*t;
+   // A shared scalar level is extracted once across the entire landscape.
+   // Near-equal summit heights therefore share contour paths and can merge naturally.
+   result.push(Math.round(v/(range.span*.0015))*(range.span*.0015));
+  }
  });
+ const unique=[...new Set(result.map(v=>v.toFixed(7)))].map(Number).sort((a,b)=>a-b);
+ return unique;
+}
+function interpolate(x1,y1,v1,x2,y2,v2,l){
+ const d=v2-v1,t=Math.abs(d)<1e-9?.5:(l-v1)/d;
+ return {x:(x1+(x2-x1)*t)*GRID,y:(y1+(y2-y1)*t)*GRID};
+}
+function pointKey(p){return `${Math.round(p.x*10)},${Math.round(p.y*10)}`;}
+function extractPaths(level){
+ const segs=[];
+ for(let y=0;y<gh-1;y++)for(let x=0;x<gw-1;x++){
+  const a=values[y*gw+x],b=values[y*gw+x+1],c=values[(y+1)*gw+x+1],d=values[(y+1)*gw+x];
+  const pts=[];
+  if((a<level)!==(b<level))pts.push(interpolate(x,y,a,x+1,y,b,level));
+  if((b<level)!==(c<level))pts.push(interpolate(x+1,y,b,x+1,y+1,c,level));
+  if((d<level)!==(c<level))pts.push(interpolate(x,y+1,d,x+1,y+1,c,level));
+  if((a<level)!==(d<level))pts.push(interpolate(x,y,a,x,y+1,d,level));
+  if(pts.length===2)segs.push(pts);
+  else if(pts.length===4){
+   const center=(a+b+c+d)*.25;
+   if((a>=level)===(center>=level))segs.push([pts[0],pts[3]],[pts[1],pts[2]]);
+   else segs.push([pts[0],pts[1]],[pts[2],pts[3]]);
+  }
+ }
+ const adj=new Map(),used=new Uint8Array(segs.length);
+ segs.forEach((s,i)=>s.forEach(p=>{const k=pointKey(p);if(!adj.has(k))adj.set(k,[]);adj.get(k).push(i);}));
  const paths=[];
- function walk(startKey,startSeg){
-  const path=[],first=all[startSeg].p;
-  let currentKey=startKey,segId=startSeg,guard=0;
-  while(segId!==undefined&&guard++<segments.length+5){
-   const seg=all[segId];if(seg.used)break;seg.used=true;
-   const k0=key(seg.p[0]),k1=key(seg.p[1]);
-   const forward=currentKey===k0;
-   const from=forward?seg.p[0]:seg.p[1],to=forward?seg.p[1]:seg.p[0];
-   if(path.length===0)path.push(from);
-   path.push(to);
-   currentKey=key(to);
-   const next=(adjacency.get(currentKey)||[]).find(id=>!all[id].used);
-   segId=next;
+ function walk(start,first){
+  let k=start,id=first,path=[],guard=0;
+  while(id!==undefined&&!used[id]&&guard++<segs.length+2){
+   used[id]=1;const s=segs[id],forward=pointKey(s[0])===k;
+   const from=forward?s[0]:s[1],to=forward?s[1]:s[0];
+   if(!path.length)path.push(from);path.push(to);k=pointKey(to);
+   id=(adj.get(k)||[]).find(n=>!used[n]);
   }
   if(path.length>1)paths.push(path);
  }
- // Start open paths at endpoints first, then trace any closed loops.
- for(const [k,ids] of adjacency)if(ids.length===1&&!all[ids[0]].used)walk(k,ids[0]);
- for(let i=0;i<all.length;i++)if(!all[i].used)walk(key(all[i].p[0]),i);
+ for(const [k,ids] of adj)if(ids.length===1&&!used[ids[0]])walk(k,ids[0]);
+ for(let i=0;i<segs.length;i++)if(!used[i])walk(pointKey(segs[i][0]),i);
  return paths;
-}
-function chooseLevels(min,max){
- const span=max-min,lo=min+span*.035,hi=max-span*.035;
- const levels=[];
- // The third contour is deliberately placed at the saddle between the newest point
- // and its nearest predecessor, so those two terrain forms merge at that elevation.
- let joinLevel=null;
- if(peaks.length>=2){
-  const newest=peaks[peaks.length-1];
-  let nearest=peaks[0],best=Infinity;
-  for(let i=0;i<peaks.length-1;i++){
-   const d=Math.hypot(newest.x-peaks[i].x,newest.y-peaks[i].y);
-   if(d<best){best=d;nearest=peaks[i];}
-  }
-  const mx=(newest.x+nearest.x)/2,my=(newest.y+nearest.y)/2;
-  joinLevel=fieldAt(mx,my)-span*.002;
-  joinLevel=Math.max(lo+span*.025,Math.min(hi-span*.025,joinLevel));
- }
- if(joinLevel===null){
-  for(let i=0;i<LEVELS;i++)levels.push(lo+(hi-lo)*(i+.5)/LEVELS);
- }else{
-  const below=joinLevel-lo,above=hi-joinLevel;
-  for(let i=0;i<2;i++)levels.push(lo+below*(i+1)/3);
-  levels.push(joinLevel);
-  for(let i=0;i<7;i++)levels.push(joinLevel+above*(i+1)/8);
- }
- return levels;
 }
 function rebuild(){
  clearCanvas();
- if(!peaks.length){contours=[];return;}
- const range=buildGrid();levelValues=chooseLevels(range.min,range.max);
- contours=levelValues.map(v=>extract(v));
+ if(!peaks.length){levels=[];contours=[];return;}
+ const range=buildGrid();
+ levels=getLevels(range);
+ contours=levels.map(l=>extractPaths(l));
  drawContours(0,0,1);
 }
 function drawContours(time=0,wave=0,opacity=1){
@@ -165,33 +160,34 @@ function drawContours(time=0,wave=0,opacity=1){
    if(path.length<2)return;
    ctx.beginPath();
    path.forEach((p,i)=>{
-    const dx=wave*Math.sin(p.y*.018+time*.003+li*.55+pi)*Math.sin(time*.0017+p.x*.012);
-    const dy=wave*.55*Math.sin(p.x*.015-time*.002+li*.7+pi);
-    if(i===0)ctx.moveTo(p.x+dx,p.y+dy);else ctx.lineTo(p.x+dx,p.y+dy);
+    const wobbleX=wave*Math.sin(p.y*.014+time*.0027+li*.43+pi*.3);
+    const wobbleY=wave*.7*Math.sin(p.x*.012-time*.0021+li*.57+pi*.2);
+    if(i===0)ctx.moveTo(p.x+wobbleX,p.y+wobbleY);
+    else ctx.lineTo(p.x+wobbleX,p.y+wobbleY);
    });
    ctx.strokeStyle=`rgba(0,0,0,${opacity})`;ctx.lineWidth=1;ctx.stroke();
   });
  });
- counter.textContent=`${peaks.length} / ${MAX_POINTS}`;
+ counter.textContent=`${peaks.length} / ${MAX_PEAKS}`;
 }
-function addPoint(x,y){
- if(phase!=='drawing'||peaks.length>=MAX_POINTS)return;
- peaks.push({x,y,seed:Math.random()*Math.PI*2});
+function addPeak(x,y){
+ if(phase!=='drawing'||peaks.length>=MAX_PEAKS)return;
+ peaks.push({x,y,seed:Math.random()*Math.PI*2,height:.94+Math.random()*.12});
  rebuild();
- if(peaks.length===MAX_POINTS){
+ if(peaks.length===MAX_PEAKS){
   hint.textContent='CONTOURS COME ALIVE';
-  setTimeout(()=>{if(phase==='drawing'&&peaks.length===MAX_POINTS){phase='fading';fadeStart=performance.now();requestAnimationFrame(animate);}},650);
- }else hint.textContent='もう一か所タップできます';
+  setTimeout(()=>{if(phase==='drawing'&&peaks.length===MAX_PEAKS){phase='fading';fadeStart=performance.now();requestAnimationFrame(animate);}},700);
+ }else hint.textContent='別の場所をタップして頂上を追加';
 }
 function animate(now){
  if(phase!=='fading')return;
- const t=Math.min(1,(now-fadeStart)/FADE_MS),wave=Math.sin(Math.PI*t);
- drawContours(now,2+22*wave+10*t,Math.pow(1-t,1.15));
+ const t=Math.min(1,(now-fadeStart)/FADE_MS),strength=Math.sin(Math.PI*t);
+ drawContours(now,2+24*strength+9*t,Math.pow(1-t,1.12));
  if(t<1)requestAnimationFrame(animate);
- else{peaks=[];contours=[];phase='drawing';hint.textContent='画面をタップして地形をつくる';clearCanvas();}
+ else{peaks=[];contours=[];levels=[];phase='drawing';hint.textContent='画面をタップして頂上をつくる';clearCanvas();}
 }
-canvas.addEventListener('pointerdown',e=>{e.preventDefault();addPoint(e.clientX,e.clientY);},{passive:false});
-reset.addEventListener('click',()=>{peaks=[];contours=[];phase='drawing';hint.textContent='画面をタップして地形をつくる';clearCanvas();});
+canvas.addEventListener('pointerdown',e=>{e.preventDefault();addPeak(e.clientX,e.clientY);},{passive:false});
+reset.addEventListener('click',()=>{peaks=[];contours=[];levels=[];phase='drawing';hint.textContent='画面をタップして頂上をつくる';clearCanvas();});
 addEventListener('resize',resize);
 resize();
 })();
