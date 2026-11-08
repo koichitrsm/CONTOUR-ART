@@ -9,142 +9,142 @@
 <title>CONTOUR ART</title>
 <link rel="manifest" href="manifest.webmanifest">
 <style>
-  * { box-sizing: border-box; }
-  html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#fff; color:#111; font-family:Arial, sans-serif; touch-action:none; }
-  #app { position:fixed; inset:0; background:#fff; }
-  canvas { display:block; width:100%; height:100%; touch-action:none; }
-  #top { position:absolute; top:calc(env(safe-area-inset-top) + 17px); left:0; right:0; text-align:center; pointer-events:none; }
-  #title { font-size:12px; letter-spacing:.34em; font-weight:500; }
-  #subtitle { margin-top:8px; font-size:10px; letter-spacing:.08em; color:#777; }
-  #counter { position:absolute; top:calc(env(safe-area-inset-top) + 18px); right:20px; font-size:11px; letter-spacing:.12em; color:#555; pointer-events:none; }
-  #hint { position:absolute; bottom:calc(env(safe-area-inset-bottom) + 22px); left:0; right:0; text-align:center; font-size:10px; letter-spacing:.12em; color:#777; pointer-events:none; }
-  #reset { position:absolute; right:18px; bottom:calc(env(safe-area-inset-bottom) + 15px); border:1px solid #bbb; border-radius:20px; padding:8px 13px; background:rgba(255,255,255,.9); color:#333; font-size:10px; letter-spacing:.08em; }
-  #reset:active { background:#eee; }
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;color:#111;font-family:Arial,sans-serif;touch-action:none}
+#app{position:fixed;inset:0;background:#fff}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#top{position:absolute;top:calc(env(safe-area-inset-top) + 17px);left:0;right:0;text-align:center;pointer-events:none}
+#title{font-size:12px;letter-spacing:.34em;font-weight:500}
+#subtitle{margin-top:8px;font-size:10px;letter-spacing:.08em;color:#777}
+#counter{position:absolute;top:calc(env(safe-area-inset-top) + 18px);right:20px;font-size:11px;letter-spacing:.12em;color:#555;pointer-events:none}
+#hint{position:absolute;bottom:calc(env(safe-area-inset-bottom) + 22px);left:0;right:0;text-align:center;font-size:10px;letter-spacing:.12em;color:#777;pointer-events:none}
+#reset{position:absolute;right:18px;bottom:calc(env(safe-area-inset-bottom) + 15px);border:1px solid #bbb;border-radius:20px;padding:8px 13px;background:rgba(255,255,255,.92);color:#333;font-size:10px;letter-spacing:.08em}
+#reset:active{background:#eee}
 </style>
 </head>
 <body>
 <div id="app">
-  <canvas id="art"></canvas>
-  <div id="top"><div id="title">CONTOUR ART</div><div id="subtitle">TAP TO CREATE A LANDSCAPE</div></div>
-  <div id="counter">0 / 5</div>
-  <div id="hint">画面をタップして等高線を描く</div>
-  <button id="reset" type="button">RESET</button>
+<canvas id="art"></canvas>
+<div id="top"><div id="title">CONTOUR ART</div><div id="subtitle">TAP TO CREATE A LANDSCAPE</div></div>
+<div id="counter">0 / 5</div>
+<div id="hint">画面をタップして等高線を描く</div>
+<button id="reset" type="button">RESET</button>
 </div>
 <script>
-(() => {
-  const canvas = document.getElementById('art');
-  const ctx = canvas.getContext('2d');
-  const counter = document.getElementById('counter');
-  const hint = document.getElementById('hint');
-  const reset = document.getElementById('reset');
-  let W=0,H=0,DPR=1;
-  let centers=[];
-  let phase='drawing'; // drawing, dissolving
-  let dissolveStart=0;
-  let lastTime=0;
-  const RINGS=10;
-  const RING_GAP=13;
-  const DURATION=2600;
+(()=>{
+const canvas=document.getElementById('art'),ctx=canvas.getContext('2d');
+const counter=document.getElementById('counter'),hint=document.getElementById('hint'),reset=document.getElementById('reset');
+let W=0,H=0,DPR=1,fields=[],joins=[],phase='drawing',dissolveStart=0;
+const LEVELS=20,DURATION=3000,POINTS=360;
 
-  function resize(){
-    const oldW=W, oldH=H;
-    const old=centers.map(c=>({x:oldW?c.x/oldW:0.5,y:oldH?c.y/oldH:0.5}));
-    W=window.innerWidth; H=window.innerHeight;
-    DPR=Math.min(window.devicePixelRatio||1,2);
-    canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
-    ctx.setTransform(DPR,0,0,DPR,0,0);
-    if(old.length) centers=old.map(p=>({x:p.x*W,y:p.y*H}));
-    drawStatic();
+function resize(){
+ const oldW=W,oldH=H;
+ const old=fields.map(f=>({x:f.x/(oldW||1),y:f.y/(oldH||1)}));
+ W=innerWidth;H=innerHeight;DPR=Math.min(devicePixelRatio||1,2);
+ canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);
+ ctx.setTransform(DPR,0,0,DPR,0,0);
+ fields.forEach((f,i)=>{f.x=old[i].x*W;f.y=old[i].y*H;f.maxR=farCorner(f.x,f.y)*1.04;});
+ render(0,0,1);
+}
+function farCorner(x,y){
+ return Math.max(Math.hypot(x,y),Math.hypot(W-x,y),Math.hypot(x-H*0+0,y-H),Math.hypot(W-x,H-y));
+}
+function seeded(seed){
+ let x=seed|0;
+ return ()=>{x=(x+0x6D2B79F5)|0;let t=Math.imul(x^(x>>>15),1|x);t^=t+Math.imul(t^(t>>>7),61|t);return ((t^(t>>>14))>>>0)/4294967296;};
+}
+function makeField(x,y){
+ const rand=seeded(Math.floor(Math.random()*1e9));
+ const f={x,y,maxR:farCorner(x,y)*1.04,seed:rand()*Math.PI*2,phases:[],amps:[],freqs:[]};
+ for(let k=0;k<4;k++){f.phases.push(rand()*Math.PI*2);f.amps.push(.035+rand()*.055);f.freqs.push(2+Math.floor(rand()*5));}
+ // Each contour level gets a smoothly changing irregularity, not a perfect circle.
+ f.levelJitter=Array.from({length:LEVELS},()=>.92+rand()*.16);
+ return f;
+}
+function contourPoint(f,level,a,time=0,animAmp=0){
+ const t=(level+1)/LEVELS;
+ const base=3+f.maxR*t;
+ const smoothLevel=Math.sin((level/LEVELS)*Math.PI);
+ let distortion=0;
+ for(let k=0;k<4;k++){
+  const phase=f.phases[k]+time*.00022*(k%2? -1:1);
+  distortion+=f.amps[k]*Math.sin(a*f.freqs[k]+phase+level*.09);
+ }
+ // Gentle angular irregularity and a little contour-to-contour variation.
+ const micro=.018*Math.sin(a*9+f.seed+level*.31)+.012*Math.sin(a*13-f.seed*.7+level*.17);
+ const radial=base*f.levelJitter[level]*(1+distortion+micro)+animAmp*smoothLevel*Math.sin(a*3+time*.002+level*.12);
+ return {x:f.x+Math.cos(a)*radial,y:f.y+Math.sin(a)*radial};
+}
+function ringPoint(f,level,angle,time=0,amp=0){
+ return contourPoint(f,level,angle,time,amp);
+}
+function drawField(f,index,time,amp,opacity){
+ ctx.beginPath();
+ for(let s=0;s<=POINTS;s++){
+  const a=s/POINTS*Math.PI*2,p=contourPoint(f,0,a,time,amp);
+  if(s===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);
+ }
+ ctx.closePath();
+ // Draw all 20 independently to keep the contours clean and evenly nested.
+ for(let level=0;level<LEVELS;level++){
+  ctx.beginPath();
+  for(let s=0;s<=POINTS;s++){
+   const a=s/POINTS*Math.PI*2,p=contourPoint(f,level,a,time,amp);
+   if(s===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);
   }
-
-  function drawStatic(){
-    ctx.clearRect(0,0,W,H);
-    ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
-    centers.forEach((c,i)=>drawContour(c.x,c.y,i,0,1));
-    counter.textContent=`${centers.length} / 5`;
-  }
-
-  function drawContour(cx,cy,index,time,opacity,amplitude=0){
-    // Ten evenly spaced, fine contour rings; ring radius expands from a compact center.
-    const base=RING_GAP;
-    for(let ring=0;ring<RINGS;ring++){
-      const radius=base*(ring+1);
-      const steps=220;
-      ctx.beginPath();
-      for(let s=0;s<=steps;s++){
-        const a=(s/steps)*Math.PI*2;
-        const wave = amplitude * (
-          Math.sin(a*3 + time*0.003 + index*1.7 + ring*.13) * 0.75 +
-          Math.sin(a*5 - time*0.0021 + ring*.31) * 0.25
-        );
-        const radial=radius+wave;
-        const x=cx+Math.cos(a)*radial;
-        const y=cy+Math.sin(a)*radial;
-        if(s===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle=`rgba(0,0,0,${opacity})`;
-      ctx.lineWidth=1;
-      ctx.stroke();
-    }
-  }
-
-  function addPoint(x,y){
-    if(phase!=='drawing') return;
-    if(centers.length>=5) return;
-    centers.push({x,y});
-    drawStatic();
-    if(centers.length===5){
-      hint.textContent='CONTOURS COME ALIVE';
-      // A brief pause lets the completed map be seen before it animates away.
-      setTimeout(()=>{
-        if(phase==='drawing' && centers.length===5){
-          phase='dissolving';
-          dissolveStart=performance.now();
-          requestAnimationFrame(animate);
-        }
-      },650);
-    } else {
-      hint.textContent='もう一か所タップできます';
-    }
-  }
-
-  function animate(now){
-    if(phase!=='dissolving') return;
-    const elapsed=now-dissolveStart;
-    const t=Math.min(1,elapsed/DURATION);
-    ctx.clearRect(0,0,W,H);
-    ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
-    // Lines undulate more strongly as they fade, then vanish together.
-    const envelope=Math.sin(Math.PI*t);
-    const waveAmp=2 + 12*envelope + 8*t;
-    const opacity=Math.pow(1-t,1.25);
-    centers.forEach((c,i)=>drawContour(c.x,c.y,i,elapsed,opacity,waveAmp));
-    if(t<1){
-      requestAnimationFrame(animate);
-    } else {
-      centers=[];
-      phase='drawing';
-      counter.textContent='0 / 5';
-      hint.textContent='画面をタップして等高線を描く';
-      drawStatic();
-    }
-  }
-
-  canvas.addEventListener('pointerdown',e=>{
-    e.preventDefault();
-    addPoint(e.clientX,e.clientY);
-  },{passive:false});
-
-  reset.addEventListener('click',()=>{
-    centers=[];
-    phase='drawing';
-    hint.textContent='画面をタップして等高線を描く';
-    drawStatic();
-  });
-
-  window.addEventListener('resize',resize);
-  resize();
+  ctx.closePath();ctx.strokeStyle=`rgba(0,0,0,${opacity})`;ctx.lineWidth=1;ctx.stroke();
+ }
+}
+function drawJoins(time,amp,opacity){
+ joins.forEach(j=>{
+  const a=fields[j.from],b=fields[j.to];if(!a||!b)return;
+  const angle=Math.atan2(b.y-a.y,b.x-a.x);
+  const p1=ringPoint(a,j.levelA,angle+j.offsetA,time,amp);
+  const p2=ringPoint(b,j.levelB,angle+Math.PI+j.offsetB,time,amp);
+  const dx=p2.x-p1.x,dy=p2.y-p1.y,len=Math.hypot(dx,dy)||1;
+  const nx=-dy/len,ny=dx/len;
+  const bend=j.bend;
+  ctx.beginPath();ctx.moveTo(p1.x,p1.y);
+  ctx.bezierCurveTo(p1.x+dx*.32+nx*bend,p1.y+dy*.32+ny*bend,
+                    p1.x+dx*.68+nx*bend,p1.y+dy*.68+ny*bend,p2.x,p2.y);
+  ctx.strokeStyle=`rgba(0,0,0,${opacity})`;ctx.lineWidth=1;ctx.stroke();
+ });
+}
+function render(time=0,amp=0,opacity=1){
+ ctx.clearRect(0,0,W,H);ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+ fields.forEach((f,i)=>drawField(f,i,time,amp,opacity));
+ drawJoins(time,amp,opacity);
+ counter.textContent=`${fields.length} / 5`;
+}
+function addPoint(x,y){
+ if(phase!=='drawing'||fields.length>=5)return;
+ const idx=fields.length,field=makeField(x,y);
+ fields.push(field);
+ if(idx>0){
+  // Randomly choose the contour elevation on both the old and new terrain.
+  const from=Math.floor(Math.random()*idx);
+  joins.push({from,to:idx,levelA:Math.floor(Math.random()*LEVELS),levelB:Math.floor(Math.random()*LEVELS),
+    offsetA:(Math.random()-.5)*.9,offsetB:(Math.random()-.5)*.9,
+    bend:(Math.random()-.5)*Math.min(W,H)*.22});
+ }
+ render();
+ if(fields.length===5){
+  hint.textContent='CONTOURS COME ALIVE';
+  setTimeout(()=>{if(phase==='drawing'&&fields.length===5){phase='dissolving';dissolveStart=performance.now();requestAnimationFrame(animate);}},650);
+ }else hint.textContent='もう一か所タップできます';
+}
+function animate(now){
+ if(phase!=='dissolving')return;
+ const elapsed=now-dissolveStart,t=Math.min(1,elapsed/DURATION);
+ const wave=Math.sin(Math.PI*t);
+ render(elapsed,2+22*wave+9*t,Math.pow(1-t,1.2));
+ if(t<1)requestAnimationFrame(animate);
+ else{fields=[];joins=[];phase='drawing';hint.textContent='画面をタップして等高線を描く';render();}
+}
+canvas.addEventListener('pointerdown',e=>{e.preventDefault();addPoint(e.clientX,e.clientY);},{passive:false});
+reset.addEventListener('click',()=>{fields=[];joins=[];phase='drawing';hint.textContent='画面をタップして等高線を描く';render();});
+addEventListener('resize',resize);
+resize();
 })();
 </script>
 </body>
