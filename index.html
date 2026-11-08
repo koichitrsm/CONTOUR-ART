@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>CONTOUR ART</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#fff; color:#111; font-family:Arial, sans-serif; touch-action:none; }
+  #app { position:fixed; inset:0; background:#fff; }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #top { position:absolute; top:calc(env(safe-area-inset-top) + 17px); left:0; right:0; text-align:center; pointer-events:none; }
+  #title { font-size:12px; letter-spacing:.34em; font-weight:500; }
+  #subtitle { margin-top:8px; font-size:10px; letter-spacing:.08em; color:#777; }
+  #counter { position:absolute; top:calc(env(safe-area-inset-top) + 18px); right:20px; font-size:11px; letter-spacing:.12em; color:#555; pointer-events:none; }
+  #hint { position:absolute; bottom:calc(env(safe-area-inset-bottom) + 22px); left:0; right:0; text-align:center; font-size:10px; letter-spacing:.12em; color:#777; pointer-events:none; }
+  #reset { position:absolute; right:18px; bottom:calc(env(safe-area-inset-bottom) + 15px); border:1px solid #bbb; border-radius:20px; padding:8px 13px; background:rgba(255,255,255,.9); color:#333; font-size:10px; letter-spacing:.08em; }
+  #reset:active { background:#eee; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="art"></canvas>
+  <div id="top"><div id="title">CONTOUR ART</div><div id="subtitle">TAP TO CREATE A LANDSCAPE</div></div>
+  <div id="counter">0 / 5</div>
+  <div id="hint">画面をタップして等高線を描く</div>
+  <button id="reset" type="button">RESET</button>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('art');
+  const ctx = canvas.getContext('2d');
+  const counter = document.getElementById('counter');
+  const hint = document.getElementById('hint');
+  const reset = document.getElementById('reset');
+  let W=0,H=0,DPR=1;
+  let centers=[];
+  let phase='drawing'; // drawing, dissolving
+  let dissolveStart=0;
+  let lastTime=0;
+  const RINGS=10;
+  const RING_GAP=13;
+  const DURATION=2600;
+
+  function resize(){
+    const oldW=W, oldH=H;
+    const old=centers.map(c=>({x:oldW?c.x/oldW:0.5,y:oldH?c.y/oldH:0.5}));
+    W=window.innerWidth; H=window.innerHeight;
+    DPR=Math.min(window.devicePixelRatio||1,2);
+    canvas.width=Math.round(W*DPR); canvas.height=Math.round(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    if(old.length) centers=old.map(p=>({x:p.x*W,y:p.y*H}));
+    drawStatic();
+  }
+
+  function drawStatic(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+    centers.forEach((c,i)=>drawContour(c.x,c.y,i,0,1));
+    counter.textContent=`${centers.length} / 5`;
+  }
+
+  function drawContour(cx,cy,index,time,opacity,amplitude=0){
+    // Ten evenly spaced, fine contour rings; ring radius expands from a compact center.
+    const base=RING_GAP;
+    for(let ring=0;ring<RINGS;ring++){
+      const radius=base*(ring+1);
+      const steps=220;
+      ctx.beginPath();
+      for(let s=0;s<=steps;s++){
+        const a=(s/steps)*Math.PI*2;
+        const wave = amplitude * (
+          Math.sin(a*3 + time*0.003 + index*1.7 + ring*.13) * 0.75 +
+          Math.sin(a*5 - time*0.0021 + ring*.31) * 0.25
+        );
+        const radial=radius+wave;
+        const x=cx+Math.cos(a)*radial;
+        const y=cy+Math.sin(a)*radial;
+        if(s===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle=`rgba(0,0,0,${opacity})`;
+      ctx.lineWidth=1;
+      ctx.stroke();
+    }
+  }
+
+  function addPoint(x,y){
+    if(phase!=='drawing') return;
+    if(centers.length>=5) return;
+    centers.push({x,y});
+    drawStatic();
+    if(centers.length===5){
+      hint.textContent='CONTOURS COME ALIVE';
+      // A brief pause lets the completed map be seen before it animates away.
+      setTimeout(()=>{
+        if(phase==='drawing' && centers.length===5){
+          phase='dissolving';
+          dissolveStart=performance.now();
+          requestAnimationFrame(animate);
+        }
+      },650);
+    } else {
+      hint.textContent='もう一か所タップできます';
+    }
+  }
+
+  function animate(now){
+    if(phase!=='dissolving') return;
+    const elapsed=now-dissolveStart;
+    const t=Math.min(1,elapsed/DURATION);
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+    // Lines undulate more strongly as they fade, then vanish together.
+    const envelope=Math.sin(Math.PI*t);
+    const waveAmp=2 + 12*envelope + 8*t;
+    const opacity=Math.pow(1-t,1.25);
+    centers.forEach((c,i)=>drawContour(c.x,c.y,i,elapsed,opacity,waveAmp));
+    if(t<1){
+      requestAnimationFrame(animate);
+    } else {
+      centers=[];
+      phase='drawing';
+      counter.textContent='0 / 5';
+      hint.textContent='画面をタップして等高線を描く';
+      drawStatic();
+    }
+  }
+
+  canvas.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    addPoint(e.clientX,e.clientY);
+  },{passive:false});
+
+  reset.addEventListener('click',()=>{
+    centers=[];
+    phase='drawing';
+    hint.textContent='画面をタップして等高線を描く';
+    drawStatic();
+  });
+
+  window.addEventListener('resize',resize);
+  resize();
+})();
+</script>
+</body>
+</html>
